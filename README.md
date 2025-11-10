@@ -8,7 +8,13 @@ YOLOv8-BeyondEarth is a repository that contains tools and scripts to create YOL
 
 ## Installation
 
-Create a new environment if wanted. Then you can install the rastertools by writing the following in your terminal. Before installing YOLOv8-BeyondEarth, you need to install `rastertools` and `shptools`.
+Create a new environment if wanted. Then you can install the rastertools by writing the following in your terminal. Before installing YOLOv8-BeyondEarth, you need to install `rastertools` and `shptools.
+
+
+Use the following Python version.
+```bash
+conda install python=3.10.15
+```   
 
 #### rastertools
 
