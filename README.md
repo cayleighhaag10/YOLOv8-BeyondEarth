@@ -1,10 +1,6 @@
 # YOLOv8-BeyondEarth
 YOLOv8-BeyondEarth is a repository that contains tools and scripts to create YOLOv8 custom datasets, train the model, and post-process the obtained results. There is a strong focus on the use of satellite imagery and the application of the YOLOv8 model on solid planetary bodies in our Solar system.
 
-## To do
-
-- [ ] Adapt `get_sliced_prediction` for use with Mask R-CNN. 
-- [ ] Use of batches for prediction could speed up the prediction. 
 
 ## Installation
 
