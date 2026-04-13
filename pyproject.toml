@@ -9,7 +9,7 @@ requires = ["geopandas>=0.14.1",
     "sahi>=0.11.15",
     "Shapely>=2.0.3",
     "scikit-image>=0.22.0",
-    "torch>=2.2.0+cu121",
+    "torch>=2.2.0",
     "tqdm>=4.65.0",
     "ultralytics>=8.1.15"]
 build-backend = "setuptools.build_meta"
