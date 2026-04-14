@@ -4,9 +4,9 @@ import numpy as np
 import pandas as pd
 import torch
 
-from YOLOv8BeyondEarth.polygon import (binary_mask_to_polygon, is_within_slice, shift_polygon,
+from YOLOv8BeyondEarth.polygon import (binary_mask_to_polygon, shift_polygon,
                                        add_geometries, bboxes_to_shp, outlines_to_shp)
-from lsnms import nms, wbc
+from lsnms import nms
 
 from sahi.slicing import slice_image
 from tqdm import tqdm
@@ -14,8 +14,6 @@ from pathlib import Path
 
 from rastertools_BOULDERING import raster, convert as raster_convert, metadata as raster_metadata
 from shptools_BOULDERING import shp
-
-#from torchvision.ops import (nms as nms_torch, batched_nms as batched_nms_torch)
 
 def YOLOv8(detection_model, image, has_mask, shift_amount, slice_size, min_area_threshold, downscale_pred):
     """
@@ -98,7 +96,7 @@ def YOLOv8(detection_model, image, has_mask, shift_amount, slice_size, min_area_
 
                 if downscale_pred:
                     if bool_mask.shape[0] == slice_size:
-                        None
+                        pass
                     else:
                         bool_mask = cv2.resize(bool_mask, (slice_size, slice_size), interpolation=cv2.INTER_AREA)
 
@@ -132,13 +130,13 @@ def YOLOv8(detection_model, image, has_mask, shift_amount, slice_size, min_area_
                         category_names.append(category_name)
                         is_polygon_within_slice_list.append(is_polygon_within_slice)
                     except:
-                        None
+                        pass
 
-        dict = {'score': scores, 'polygon': polygons,
-                'category_id': category_ids, 'category_name': category_names,
-                'is_within_slice': is_polygon_within_slice_list}
+        result = {'score': scores, 'polygon': polygons,
+                  'category_id': category_ids, 'category_name': category_names,
+                  'is_within_slice': is_polygon_within_slice_list}
 
-        df = pd.DataFrame(dict)
+        df = pd.DataFrame(result)
     return df
 
 def get_sliced_prediction(in_raster,
