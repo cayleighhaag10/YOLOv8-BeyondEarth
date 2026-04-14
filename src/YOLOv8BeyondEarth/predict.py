@@ -224,6 +224,8 @@ def get_sliced_prediction(in_raster,
         df = YOLOv8(detection_model, image, has_mask, shift_amounts[i], slice_size, min_area_threshold, downscale_pred)
         if df.shape[0] > 0:
             frames.append(df)
+        if i % 100 == 0:
+            torch.cuda.empty_cache()
 
     df_all = pd.concat(frames, ignore_index=True)
     gdf = add_geometries(in_raster, df_all)
