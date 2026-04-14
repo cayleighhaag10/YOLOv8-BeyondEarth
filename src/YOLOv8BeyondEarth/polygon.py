@@ -1,5 +1,5 @@
+import cv2
 import numpy as np
-import skimage
 import rasterio as rio
 import geopandas as gpd
 
@@ -56,19 +56,15 @@ def outlines_to_shp(gdf, out_shp):
     gdf_copy.drop(columns=['bbox', 'polygon']).to_file(out_shp)
 
 
-def close_contour(contour):
-    if not np.array_equal(contour[0], contour[-1]):
-        contour = np.vstack((contour, contour[0]))
-    return contour
-
-
 def binary_mask_to_polygon(binary_mask):
     """
     Convert a binary mask (2D numpy array) to a polygon outline (array of x,y coordinates).
-    Pads the mask first to ensure contours touching the image edge are properly closed.
+    Uses OpenCV findContours, which is significantly faster than skimage find_contours.
+    Returns the largest contour found as an (N, 2) array of (x, y) coordinates.
     """
-    padded_binary_mask = np.pad(binary_mask, pad_width=1, mode='constant', constant_values=0)
-    contours = skimage.measure.find_contours(padded_binary_mask, 0.5)
-    contours = np.subtract(contours, 1)
-    contour = np.flip(contours[0], axis=1)
-    return contour
+    mask_uint8 = binary_mask.astype(np.uint8) * 255
+    contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not contours:
+        raise ValueError("No contour found in mask")
+    contour = max(contours, key=cv2.contourArea)
+    return contour.squeeze(1)  # (N, 1, 2) -> (N, 2)
