@@ -288,3 +288,229 @@ def get_sliced_prediction(in_raster,
         return gdf, gdf_nms
     else:
         return gdf, None
+
+
+def binary_mask_to_polygon_cv(binary_mask):
+    """
+    Faster alternative to skimage.measure.find_contours using cv2.findContours.
+    Converts a binary mask (2D array of 0/1) into a polygon contour.
+
+    Args:
+        binary_mask (np.ndarray): 2D numpy array, dtype=bool or uint8
+
+    Returns:
+        np.ndarray: (N, 2) array of polygon coordinates (x, y)
+                    or None if no valid contour is found
+    """
+    mask_uint8 = (binary_mask.astype(np.uint8) * 255)
+    contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+    contour = max(contours, key=cv2.contourArea)
+    return contour.squeeze(1)
+
+
+def YOLOv8fastv2(prediction_result, in_slice_info, detection_model, has_mask,
+                 shift_amount, slice_size, min_area_threshold, downscale_pred):
+    """
+    Processes a single prediction result with GPU-side filtering for speed.
+    Confidence filtering, mask thresholding, and area counting stay on GPU;
+    only one .cpu() transfer per detection.
+    """
+    shift_x, shift_y = shift_amount
+    boxes = prediction_result.boxes.data
+    if boxes.size(0) == 0:
+        return pd.DataFrame(columns=['score', 'polygon', 'category_id', 'category_name', 'is_within_slice'])
+
+    # filter on GPU
+    conf_mask = boxes[:, 4] >= detection_model.confidence_threshold
+    boxes = boxes[conf_mask]
+    if has_mask:
+        masks = prediction_result.masks.data[conf_mask]
+    else:
+        masks = torch.empty((boxes.shape[0], 0), device=boxes.device)
+
+    scores, polygons, category_ids, category_names, is_within_slice_list = [], [], [], [], []
+
+    for i in range(len(boxes)):
+        score = float(boxes[i, 4])
+        category_id = int(boxes[i, 5])
+        category_name = detection_model.category_mapping[str(category_id)]
+
+        if has_mask and masks[i].numel() > 0:
+            bool_mask = masks[i]
+            bool_mask = (bool_mask >= 0.5).float()
+            if downscale_pred and bool_mask.shape[-1] != slice_size:
+                bool_mask_np = cv2.resize(
+                    bool_mask.cpu().numpy(),
+                    (slice_size, slice_size),
+                    interpolation=cv2.INTER_AREA
+                )
+                bool_mask = torch.from_numpy(bool_mask_np).to(bool_mask.device)
+        else:
+            bool_mask = torch.zeros((slice_size, slice_size), device=boxes.device)
+
+        area = int(torch.count_nonzero(bool_mask).item())
+        if area <= min_area_threshold:
+            continue
+
+        bool_mask_np = (bool_mask.cpu().numpy() > 0).astype(np.uint8)
+
+        try:
+            polygon = binary_mask_to_polygon_cv(bool_mask_np)
+            if polygon is None:
+                continue
+
+            if downscale_pred:
+                polygon_slice = polygon
+            else:
+                polygon_slice = np.stack([
+                    (polygon[:, 0] / bool_mask_np.shape[0]) * slice_size,
+                    (polygon[:, 1] / bool_mask_np.shape[0]) * slice_size
+                ], axis=-1)
+
+            min_edge_distance = 0.05 * slice_size
+            max_edge_distance = 0.95 * slice_size
+            is_within = (
+                (polygon_slice[:, 0].min() >= min_edge_distance and polygon_slice[:, 0].max() <= max_edge_distance) and
+                (polygon_slice[:, 1].min() >= min_edge_distance and polygon_slice[:, 1].max() <= max_edge_distance)
+            )
+
+            if not is_within:
+                score = 0.10
+
+            shifted_polygon = shift_polygon(polygon_slice, shift_x, shift_y)
+            scores.append(score)
+            polygons.append(shifted_polygon)
+            category_ids.append(category_id)
+            category_names.append(category_name)
+            is_within_slice_list.append(is_within)
+
+        except Exception:
+            continue
+
+    return pd.DataFrame({
+        'score': scores,
+        'polygon': polygons,
+        'category_id': category_ids,
+        'category_name': category_names,
+        'is_within_slice': is_within_slice_list
+    })
+
+
+def get_sliced_predictionfast(in_raster,
+                              detection_model=None,
+                              confidence_threshold: float = 0.1,
+                              has_mask=True,
+                              output_dir=None,
+                              interim_file_name=None,
+                              interim_dir=None,
+                              slice_size: int = None,
+                              inference_size: int = None,
+                              overlap_height_ratio: float = 0.2,
+                              overlap_width_ratio: float = 0.2,
+                              min_area_threshold: int = None,
+                              downscale_pred: bool = False,
+                              postprocess: bool = True,
+                              postprocess_match_threshold: float = 0.5,
+                              postprocess_class_agnostic: bool = False,
+                              batch_size: int = 8):
+    """
+    Batched version of get_sliced_prediction. Runs inference in batches for better
+    GPU utilization. Uses YOLOv8fastv2 for GPU-side filtering and cv2-based polygon
+    extraction.
+    """
+    in_raster = Path(in_raster)
+    output_dir = Path(output_dir)
+    out_png = in_raster.with_name(in_raster.stem + ".png")
+    raster_convert.tiff_to_png(in_raster, out_png)
+
+    tmp_dir = (Path.home() / "tmp")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    detection_model.image_size = inference_size
+    detection_model.confidence_threshold = confidence_threshold
+
+    slice_image_result = slice_image(
+        image=out_png.as_posix(),
+        output_file_name=interim_file_name,
+        output_dir=interim_dir,
+        slice_height=slice_size,
+        slice_width=slice_size,
+        overlap_height_ratio=overlap_height_ratio,
+        overlap_width_ratio=overlap_width_ratio,
+        out_ext=".png",
+    )
+
+    num_slices = len(slice_image_result)
+    shift_amounts = slice_image_result.starting_pixels
+    slice_images = slice_image_result.images
+    frames = []
+
+    for i in tqdm(range(0, num_slices, batch_size)):
+        batch_images = slice_images[i:i + batch_size]
+        batch_shifts = shift_amounts[i:i + batch_size]
+
+        prediction_results = detection_model.model(
+            batch_images, imgsz=detection_model.image_size, verbose=False, device=detection_model.device
+        )
+
+        for j, prediction_result in enumerate(prediction_results):
+            df = YOLOv8fastv2(prediction_result, slice_images[i + j], detection_model, has_mask,
+                              batch_shifts[j], slice_size, min_area_threshold, downscale_pred)
+            if df.shape[0] > 0:
+                frames.append(df)
+
+    if len(frames) == 0:
+        df_all = pd.DataFrame(columns=['score', 'polygon', 'category_id', 'category_name', 'is_within_slice'])
+    else:
+        df_all = pd.concat(frames, ignore_index=True)
+
+    gdf = add_geometries(in_raster, df_all)
+
+    gdf_true_footprint = raster.true_footprint(in_raster, tmp_dir / "true-footprint.shp")
+    in_res = raster_metadata.get_resolution(in_raster)[0]
+    in_meta = raster_metadata.get_profile(in_raster)
+    gpd.GeoDataFrame(geometry=gdf_true_footprint.geometry.boundary.values, crs=in_meta["crs"].to_wkt()).to_file(
+        tmp_dir / "true-footprint-as-a-line.shp")
+    gdf_line_buffer = shp.buffer(tmp_dir / "true-footprint-as-a-line.shp", slice_size * 0.10 * in_res,
+                                 (tmp_dir / "footprint-buffer.shp"))
+
+    gdf_boulders = gdf.copy()
+    gdf_boulders["id"] = gdf_boulders.index
+    gdf_intersected = gpd.overlay(gdf_boulders, gdf_line_buffer, how="intersection", keep_geom_type=True)
+
+    gdf["is_at_edge"] = False
+    gdf.loc[gdf_intersected.id.values, "is_at_edge"] = True
+
+    gdf = gdf.loc[np.logical_or(gdf.is_at_edge == True, gdf.is_within_slice == True)]
+    gdf = gdf.drop_duplicates(subset="geometry", ignore_index=True)
+    gdf["id"] = gdf.index
+
+    bbox_filename = in_raster.stem + "-predictions-ct-" + str(int(confidence_threshold * 100)).zfill(3) + "-ss-" + str(
+        slice_size) + "-is-" + str(inference_size) + "-ov-" + str(int(overlap_height_ratio * 100)).zfill(3) + "-bbox.shp"
+    mask_filename = bbox_filename.replace("-bbox.shp", "-mask.shp")
+
+    if downscale_pred:
+        bbox_filename = bbox_filename.replace("-bbox.shp", "-downscaled-bbox.shp")
+        mask_filename = mask_filename.replace("-mask.shp", "-downscaled-mask.shp")
+
+    out_bbox_shp = output_dir / bbox_filename
+    out_mask_shp = output_dir / mask_filename
+    bboxes_to_shp(gdf, out_bbox_shp)
+    outlines_to_shp(gdf, out_mask_shp)
+
+    if postprocess:
+        if postprocess_class_agnostic:
+            keep = nms(boxes=np.stack(gdf.bbox.values), scores=gdf.score.values,
+                       iou_threshold=postprocess_match_threshold, class_ids=None, rtree_leaf_size=32)
+        else:
+            keep = nms(boxes=np.stack(gdf.bbox.values), scores=gdf.score.values,
+                       iou_threshold=postprocess_match_threshold, class_ids=gdf.category_id.values, rtree_leaf_size=32)
+
+        gdf_nms = gdf.loc[keep]
+        bboxes_to_shp(gdf_nms, out_bbox_shp.with_name(out_bbox_shp.stem + "-nms.shp"))
+        outlines_to_shp(gdf_nms, out_mask_shp.with_name(out_mask_shp.stem + "-nms.shp"))
+        return gdf, gdf_nms
+    else:
+        return gdf, None
