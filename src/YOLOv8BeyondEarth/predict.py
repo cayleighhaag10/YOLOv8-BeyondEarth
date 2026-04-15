@@ -472,12 +472,17 @@ def get_sliced_predictionfast(in_raster,
 
     gdf = add_geometries(in_raster, df_all)
 
-    gdf_true_footprint = raster.true_footprint(in_raster, tmp_dir / "true-footprint.shp")
     in_res = raster_metadata.get_resolution(in_raster)[0]
-    in_meta = raster_metadata.get_profile(in_raster)
-    gpd.GeoDataFrame(geometry=gdf_true_footprint.geometry.boundary.values, crs=in_meta["crs"].to_wkt()).to_file(
-        tmp_dir / "true-footprint-as-a-line.shp")
-    gdf_line_buffer = shp.buffer(tmp_dir / "true-footprint-as-a-line.shp", slice_size * 0.10 * in_res,
+
+    footprint_shp = tmp_dir / "true-footprint.shp"
+    footprint_line_shp = tmp_dir / "true-footprint-as-a-line.shp"
+    if not footprint_line_shp.exists():
+        gdf_true_footprint = raster.true_footprint(in_raster, footprint_shp)
+        in_meta = raster_metadata.get_profile(in_raster)
+        gpd.GeoDataFrame(geometry=gdf_true_footprint.geometry.boundary.values, crs=in_meta["crs"].to_wkt()).to_file(
+            footprint_line_shp)
+
+    gdf_line_buffer = shp.buffer(footprint_line_shp, slice_size * 0.10 * in_res,
                                  (tmp_dir / "footprint-buffer.shp"))
 
     gdf_boulders = gdf.copy()
