@@ -423,7 +423,8 @@ def get_sliced_predictionfast(in_raster,
     in_raster = Path(in_raster)
     output_dir = Path(output_dir)
     out_png = in_raster.with_name(in_raster.stem + ".png")
-    raster_convert.tiff_to_png(in_raster, out_png)
+    if not out_png.exists():
+        raster_convert.tiff_to_png(in_raster, out_png)
 
     tmp_dir = (Path.home() / "tmp")
     tmp_dir.mkdir(parents=True, exist_ok=True)
