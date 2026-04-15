@@ -414,11 +414,12 @@ def get_sliced_predictionfast(in_raster,
                               postprocess: bool = True,
                               postprocess_match_threshold: float = 0.5,
                               postprocess_class_agnostic: bool = False,
-                              batch_size: int = 8):
+                              batch_size: int = 8,
+                              half: bool = False):
     """
     Batched version of get_sliced_prediction. Runs inference in batches for better
     GPU utilization. Uses YOLOv8fastv2 for GPU-side filtering and cv2-based polygon
-    extraction.
+    extraction. Set half=True to enable fp16 inference (faster on modern GPUs).
     """
     in_raster = Path(in_raster)
     output_dir = Path(output_dir)
@@ -431,6 +432,8 @@ def get_sliced_predictionfast(in_raster,
 
     detection_model.image_size = inference_size
     detection_model.confidence_threshold = confidence_threshold
+    if half:
+        detection_model.model.model.half()
 
     slice_image_result = slice_image(
         image=out_png.as_posix(),
@@ -452,9 +455,10 @@ def get_sliced_predictionfast(in_raster,
         batch_images = slice_images[i:i + batch_size]
         batch_shifts = shift_amounts[i:i + batch_size]
 
-        prediction_results = detection_model.model(
-            batch_images, imgsz=detection_model.image_size, verbose=False, device=detection_model.device
-        )
+        with torch.no_grad():
+            prediction_results = detection_model.model(
+                batch_images, imgsz=detection_model.image_size, verbose=False, device=detection_model.device
+            )
 
         for j, prediction_result in enumerate(prediction_results):
             df = YOLOv8fastv2(prediction_result, slice_images[i + j], detection_model, has_mask,
