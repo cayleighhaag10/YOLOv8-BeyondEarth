@@ -474,16 +474,19 @@ def get_sliced_predictionfast(in_raster,
 
     in_res = raster_metadata.get_resolution(in_raster)[0]
 
-    footprint_shp = tmp_dir / "true-footprint.shp"
-    footprint_line_shp = tmp_dir / "true-footprint-as-a-line.shp"
+    footprint_shp = tmp_dir / f"{in_raster.stem}-true-footprint.shp"
+    footprint_line_shp = tmp_dir / f"{in_raster.stem}-true-footprint-as-a-line.shp"
     if not footprint_line_shp.exists():
         gdf_true_footprint = raster.true_footprint(in_raster, footprint_shp)
         in_meta = raster_metadata.get_profile(in_raster)
         gpd.GeoDataFrame(geometry=gdf_true_footprint.geometry.boundary.values, crs=in_meta["crs"].to_wkt()).to_file(
             footprint_line_shp)
 
-    gdf_line_buffer = shp.buffer(footprint_line_shp, slice_size * 0.10 * in_res,
-                                 (tmp_dir / "footprint-buffer.shp"))
+    footprint_buffer_shp = tmp_dir / f"{in_raster.stem}-footprint-buffer-ss-{slice_size}.shp"
+    if not footprint_buffer_shp.exists():
+        gdf_line_buffer = shp.buffer(footprint_line_shp, slice_size * 0.10 * in_res, footprint_buffer_shp)
+    else:
+        gdf_line_buffer = gpd.read_file(footprint_buffer_shp)
 
     gdf_boulders = gdf.copy()
     gdf_boulders["id"] = gdf_boulders.index
