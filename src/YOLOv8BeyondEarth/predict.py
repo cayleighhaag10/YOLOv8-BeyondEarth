@@ -432,8 +432,6 @@ def get_sliced_predictionfast(in_raster,
 
     detection_model.image_size = inference_size
     detection_model.confidence_threshold = confidence_threshold
-    if half:
-        detection_model.model.model.half()
 
     slice_image_result = slice_image(
         image=out_png.as_posix(),
@@ -457,7 +455,8 @@ def get_sliced_predictionfast(in_raster,
 
         with torch.no_grad():
             prediction_results = detection_model.model(
-                batch_images, imgsz=detection_model.image_size, verbose=False, device=detection_model.device
+                batch_images, imgsz=detection_model.image_size, verbose=False,
+                device=detection_model.device, half=half
             )
 
         for j, prediction_result in enumerate(prediction_results):
