@@ -461,6 +461,9 @@ def get_sliced_predictionfast(in_raster,
             if df.shape[0] > 0:
                 frames.append(df)
 
+        if (i // batch_size) % 50 == 0:
+            torch.cuda.empty_cache()
+
     if len(frames) == 0:
         df_all = pd.DataFrame(columns=['score', 'polygon', 'category_id', 'category_name', 'is_within_slice'])
     else:
