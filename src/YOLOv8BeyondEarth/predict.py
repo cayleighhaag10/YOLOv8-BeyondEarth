@@ -414,7 +414,7 @@ def get_sliced_predictionfast(in_raster,
                               postprocess: bool = True,
                               postprocess_match_threshold: float = 0.5,
                               postprocess_class_agnostic: bool = False,
-                              batch_size: int = 8,
+                              batch_size: int = 16,
                               half: bool = False):
     """
     Batched version of get_sliced_prediction. Runs inference in batches for better
