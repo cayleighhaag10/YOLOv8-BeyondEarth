@@ -56,7 +56,50 @@ python
 ```
 
 ```python
-from YOLOv8BeyondEarth.predict import get_sliced_prediction
+from YOLOv8BeyondEarth.predict import get_sliced_predictionfast
+```
+
+## Running on Sherlock (Stanford HPC)
+
+Inference is GPU-bound, so getting the right GPU allocation is critical for performance. On a shared GPU slice (~6GB), a full NAC image with 4 slice sizes takes ~35 minutes. On a full NVIDIA A30 (24GB), the same run takes ~7.5 minutes.
+
+### Requesting a full A30 on Sherlock OnDemand
+
+When launching a JupyterLab session via [Sherlock OnDemand](https://ondemand.sherlock.stanford.edu):
+
+| Field | Value |
+|---|---|
+| Partition | `gpu` |
+| #GPUs | `1` |
+| Memory (GB) | `32` |
+| Additional node features | `GPU_MEM:24GB` |
+
+The `GPU_MEM:24GB` constraint ensures you get a full A30 rather than a shared slice.
+
+### Recommended inference settings
+
+```python
+slice_sizes = [256, 512, 768, 1024]
+confidence_threshold = 0.10
+inference_size = 1024
+overlap_height_ratio = 0.20
+
+for slice_size in slice_sizes:
+    __, __ = get_sliced_predictionfast(in_raster,
+                        detection_model=detection_model,
+                        confidence_threshold=confidence_threshold,
+                        has_mask=True,
+                        output_dir=output_dir,
+                        slice_size=slice_size,
+                        inference_size=inference_size,
+                        overlap_height_ratio=0.2,
+                        overlap_width_ratio=0.2,
+                        min_area_threshold=6,
+                        downscale_pred=True,
+                        postprocess=True,
+                        postprocess_match_threshold=0.2,
+                        postprocess_class_agnostic=False,
+                        batch_size=16)
 ```
 
 ## Bugs
