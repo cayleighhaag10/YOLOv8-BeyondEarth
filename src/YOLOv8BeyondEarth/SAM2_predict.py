@@ -156,14 +156,9 @@ def get_sliced_prediction_SAM2(in_raster,
                 scores_per_slice.append(slice_boxes[:, 4])
                 categories_per_slice.append(slice_boxes[:, 5])
 
-        # SAM2 expects RGB images (not grayscale). Broadcast over the channel dimension.
-        RGB_slices = []
-        for image in batch_images:
-            RGB_slices.append(np.stack([image, image, image], axis=-1))
-
         # Run SAM2
         with torch.no_grad():
-            predictor.set_image_batch(RGB_slices)
+            predictor.set_image_batch(batch_images)
             masks_batch, _, _ =  predictor.predict_batch(
                 None,
                 None, 
