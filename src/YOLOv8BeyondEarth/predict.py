@@ -14,6 +14,7 @@ from pathlib import Path
 
 from rastertools_BOULDERING import raster, convert as raster_convert, metadata as raster_metadata
 from shptools_BOULDERING import shp
+from predict import YOLOv8fastv2
 
 def YOLOv8(detection_model, image, has_mask, shift_amount, slice_size, min_area_threshold, downscale_pred):
     """
