@@ -158,25 +158,33 @@ def get_sliced_prediction_SAM2(in_raster,
 
         # Run SAM2
         with torch.no_grad():
-            predictor.set_image_batch(batch_images)
-            masks_batch, _, _ =  predictor.predict_batch(
-                None,
-                None, 
-                box_batch=bounding_boxes_per_slice, 
-                multimask_output=False
-            )
+            non_empty_indices = [j for j, boxes in enumerate(bounding_boxes_per_slice) if len(boxes) > 0]
+            existing_images = [batch_images[j] for j in non_empty_indices]
+            existing_bounding_boxes = [bounding_boxes_per_slice[j] for j in non_empty_indices]
+            
+            if len(existing_images) > 0:
+                predictor.set_image_batch(existing_images)
+                masks_batch, _, _ =  predictor.predict_batch(
+                    None,
+                    None, 
+                    box_batch=existing_bounding_boxes, 
+                    multimask_output=False
+                )
+            else:
+                masks_batch = []
 
         # Process results of SAM2
-        for j, mask in enumerate(masks_batch):
-            slice_masks = mask
-            slice_shift = batch_shifts[j] 
-            slice_scores = scores_per_slice[j]
-            slice_categories = categories_per_slice[j]
+        if len(masks_batch) > 0:
+            for j, non_empty_idx in enumerate(non_empty_indices):
+                slice_masks = masks_batch[j]
+                slice_shift = batch_shifts[non_empty_idx] 
+                slice_scores = scores_per_slice[non_empty_idx]
+                slice_categories = categories_per_slice[non_empty_idx]
 
-            df = process_SAM2(slice_masks, slice_shift, slice_scores, slice_categories, slice_size, min_area_threshold, downscale_pred, detection_model)
+                df = process_SAM2(slice_masks, slice_shift, slice_scores, slice_categories, slice_size, min_area_threshold, downscale_pred, detection_model)
 
-            if df.shape[0] > 0:
-                frames.append(df)
+                if df.shape[0] > 0:
+                    frames.append(df)
 
         if (i // batch_size) % 50 == 0:
             torch.cuda.empty_cache()
