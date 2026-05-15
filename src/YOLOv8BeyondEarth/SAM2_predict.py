@@ -25,13 +25,12 @@ def process_SAM2(slice_masks, slice_shift, slice_scores, slice_categories, slice
         category_id = int(slice_categories[idx])
         category_name = detection_model.category_mapping[str(category_id)]  
         
-        print(slice_masks.shape)
-        mask = mask.squeeze(0)
-        area = int(torch.count_nonzero(mask).item())
+        mask = np.squeeze(mask, axis=0)
+        area = int(np.count_nonzero(mask))
         if area <= min_area_threshold:
             continue
 
-        bool_mask_np = (mask.cpu().numpy() > 0).astype(np.uint8)
+        bool_mask_np = (mask > 0).astype(np.uint8)
 
         try:
             polygon = binary_mask_to_polygon_cv(bool_mask_np)
