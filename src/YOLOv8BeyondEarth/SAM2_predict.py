@@ -25,6 +25,7 @@ def process_SAM2(slice_masks, slice_shift, slice_scores, slice_categories, slice
         category_id = int(slice_categories[idx])
         category_name = detection_model.category_mapping[str(category_id)]  
         
+        print(slice_masks.shape)
         mask = mask.squeeze(0)
         area = int(torch.count_nonzero(mask).item())
         if area <= min_area_threshold:
