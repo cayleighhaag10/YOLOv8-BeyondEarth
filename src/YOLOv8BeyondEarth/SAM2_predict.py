@@ -194,6 +194,7 @@ def get_sliced_prediction_SAM2(in_raster,
     else:
         df_all = pd.concat(frames, ignore_index=True)
 
+    df_all = df_all[df_all['polygon'].apply(lambda p: len(p) >= 4)].reset_index(drop=True)
     gdf = add_geometries(in_raster, df_all)
 
     in_res = raster_metadata.get_resolution(in_raster)[0]
