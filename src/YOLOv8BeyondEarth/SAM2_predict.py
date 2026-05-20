@@ -30,7 +30,7 @@ def process_SAM2(slice_masks, slice_shift, slice_scores, slice_categories, slice
         if area <= min_area_threshold:
             continue
 
-        bool_mask_np = (mask > 0).astype(np.uint8)
+        bool_mask_np = (np.squeeze(mask) > 0).astype(np.uint8)
 
         try:
             polygon = binary_mask_to_polygon_cv(bool_mask_np)
