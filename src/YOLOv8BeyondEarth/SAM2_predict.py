@@ -34,7 +34,7 @@ def process_SAM2(slice_masks, slice_shift, slice_scores, slice_categories, slice
 
         try:
             polygon = binary_mask_to_polygon_cv(bool_mask_np)
-            if polygon is None:
+            if polygon is None or len(polygon) < 4:
                 continue
 
             if downscale_pred:
