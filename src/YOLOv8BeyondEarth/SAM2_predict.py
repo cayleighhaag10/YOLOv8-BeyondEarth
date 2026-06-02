@@ -222,7 +222,6 @@ def get_sliced_prediction_SAM2(in_raster,
     gdf["is_at_edge"] = False
     gdf.loc[gdf_intersected.id.values, "is_at_edge"] = True
 
-    gdf = gdf.loc[np.logical_or(gdf.is_at_edge == True, gdf.is_within_slice == True)]
     gdf = gdf.drop_duplicates(subset="geometry", ignore_index=True)
     gdf["id"] = gdf.index
 
