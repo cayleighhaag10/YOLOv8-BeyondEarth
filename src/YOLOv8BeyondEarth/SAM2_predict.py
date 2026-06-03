@@ -17,7 +17,7 @@ from shptools_BOULDERING import shp
 
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 
-def process_SAM2(slice_masks, slice_shift, slice_scores, slice_categories, slice_size, min_area_threshold, downscale_pred, detection_model):
+def process_SAM2(slice_masks, slice_shift, slice_scores, slice_categories, slice_size, min_area_threshold, downscale_pred, detection_model, smooth_mask=False, smooth_sigma=1.0):
     shift_x, shift_y = slice_shift
     scores, polygons, category_ids, category_names, is_within_slice_list = [], [], [], [], []
 
@@ -25,14 +25,18 @@ def process_SAM2(slice_masks, slice_shift, slice_scores, slice_categories, slice
     for idx, mask in enumerate(slice_masks):
         score = float(slice_scores[idx])
         category_id = int(slice_categories[idx])
-        category_name = detection_model.category_mapping[str(category_id)]  
-        
-        # mask = np.squeeze(mask, axis=0)
+        category_name = detection_model.category_mapping[str(category_id)]
+
         area = int(np.count_nonzero(mask))
         if area <= min_area_threshold:
             continue
 
         bool_mask_np = (np.squeeze(mask) > 0).astype(np.uint8)
+
+        if smooth_mask:
+            ksize = int(smooth_sigma * 6) | 1  # nearest odd number >= 6*sigma
+            blurred = cv2.GaussianBlur(bool_mask_np.astype(np.float32), (ksize, ksize), smooth_sigma)
+            bool_mask_np = (blurred > 0.5).astype(np.uint8)
 
         try:
             polygon = binary_mask_to_polygon_cv(bool_mask_np)
@@ -94,7 +98,8 @@ def get_sliced_prediction_SAM2(in_raster,
                               postprocess_class_agnostic: bool = False,
                               batch_size: int = 16,
                               half: bool = False,
-                              use_yolo_mask_prompt: bool = False):
+                              smooth_mask: bool = False,
+                              smooth_sigma: float = 1.0):
     # Convert tiff (geospatial metadata) to PNG (expedted input to slice_image)
     in_raster = Path(in_raster)
     output_dir = Path(output_dir)
@@ -140,7 +145,6 @@ def get_sliced_prediction_SAM2(in_raster,
         # This list stores one list per image slice. Each image slice's list contains
         # all bounding box predictions whose confidence is at least confidence_threshold.
         bounding_boxes_per_slice = []
-        yolo_masks_per_slice = []
         scores_per_slice = []
         categories_per_slice = []
         for j, prediction_result in enumerate(prediction_results):
@@ -150,9 +154,9 @@ def get_sliced_prediction_SAM2(in_raster,
             confidence_mask = slice_boxes[:, 4] >= confidence_threshold
             slice_boxes = slice_boxes[confidence_mask]
 
-            if len(slice_boxes) == 0:
+            # Append bounding boxes for given image slice to list
+            if (len(slice_boxes) == 0):
                 bounding_boxes_per_slice.append([])
-                yolo_masks_per_slice.append(None)
                 scores_per_slice.append([])
                 categories_per_slice.append([])
             else:
@@ -160,43 +164,20 @@ def get_sliced_prediction_SAM2(in_raster,
                 scores_per_slice.append(slice_boxes[:, 4])
                 categories_per_slice.append(slice_boxes[:, 5])
 
-                # Collect YOLO masks for optional mask-prompt mode
-                if use_yolo_mask_prompt and prediction_result.masks is not None:
-                    raw = prediction_result.masks.data[confidence_mask]  # (N, H, W)
-                    resized = []
-                    for m in raw:
-                        m_np = m.cpu().numpy().astype(np.float32)
-                        m_256 = cv2.resize(m_np, (256, 256), interpolation=cv2.INTER_LINEAR)
-                        resized.append(m_256[np.newaxis])  # (1, 256, 256)
-                    yolo_masks_per_slice.append(np.stack(resized))  # (N, 1, 256, 256)
-                else:
-                    yolo_masks_per_slice.append(None)
-
         # Run SAM2
         with torch.no_grad():
             non_empty_indices = [j for j, boxes in enumerate(bounding_boxes_per_slice) if len(boxes) > 0]
             existing_images = [batch_images[j] for j in non_empty_indices]
+            existing_bounding_boxes = [bounding_boxes_per_slice[j] for j in non_empty_indices]
 
             if len(existing_images) > 0:
                 predictor.set_image_batch(existing_images)
-                if use_yolo_mask_prompt and all(yolo_masks_per_slice[j] is not None for j in non_empty_indices):
-                    # Use YOLO masks as prompts — no box, so SAM2 decoder has no rectangular bias
-                    mask_input_batch = [yolo_masks_per_slice[j] for j in non_empty_indices]
-                    masks_batch, _, _ = predictor.predict_batch(
-                        None,
-                        None,
-                        box_batch=None,
-                        mask_input_batch=mask_input_batch,
-                        multimask_output=False
-                    )
-                else:
-                    existing_bounding_boxes = [bounding_boxes_per_slice[j] for j in non_empty_indices]
-                    masks_batch, _, _ = predictor.predict_batch(
-                        None,
-                        None,
-                        box_batch=existing_bounding_boxes,
-                        multimask_output=False
-                    )
+                masks_batch, _, _ =  predictor.predict_batch(
+                    None,
+                    None,
+                    box_batch=existing_bounding_boxes,
+                    multimask_output=False
+                )
             else:
                 masks_batch = []
 
@@ -208,7 +189,7 @@ def get_sliced_prediction_SAM2(in_raster,
                 slice_scores = scores_per_slice[non_empty_idx]
                 slice_categories = categories_per_slice[non_empty_idx]
 
-                df = process_SAM2(slice_masks, slice_shift, slice_scores, slice_categories, slice_size, min_area_threshold, downscale_pred, detection_model)
+                df = process_SAM2(slice_masks, slice_shift, slice_scores, slice_categories, slice_size, min_area_threshold, downscale_pred, detection_model, smooth_mask=smooth_mask, smooth_sigma=smooth_sigma)
 
                 if df.shape[0] > 0:
                     frames.append(df)
