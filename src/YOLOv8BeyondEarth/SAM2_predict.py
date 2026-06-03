@@ -17,47 +17,6 @@ from shptools_BOULDERING import shp
 
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 
-def refine_mask_with_obb(image_np, mask, predictor):
-    """
-    Re-prompt SAM2 using the oriented bounding box of an initial mask.
-    Rotates the tile so the OBB is axis-aligned, re-prompts SAM2, then
-    rotates the refined mask back. Skips if the mask is already within 5°
-    of axis-alignment.
-    Returns a bool (H, W) array.
-    """
-    contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return mask.astype(bool)
-
-    rect = cv2.minAreaRect(max(contours, key=cv2.contourArea))
-    center, (w, h), angle = rect
-
-    # Skip if already within 5° of axis-aligned (angle in [-90,0), so check both ends)
-    if w == 0 or h == 0 or min(abs(angle), abs(angle + 90)) < 5:
-        return mask.astype(bool)
-
-    img_h, img_w = image_np.shape[:2]
-    M = cv2.getRotationMatrix2D(center, angle, 1.0)
-    rotated_image = cv2.warpAffine(image_np, M, (img_w, img_h))
-
-    # After rotating by `angle`, w is horizontal and h is vertical — use directly
-    cx, cy = center
-    x1 = max(0.0, cx - w / 2)
-    y1 = max(0.0, cy - h / 2)
-    x2 = min(float(img_w), cx + w / 2)
-    y2 = min(float(img_h), cy + h / 2)
-
-    predictor.set_image(rotated_image)
-    new_masks, _, _ = predictor.predict(
-        box=np.array([[x1, y1, x2, y2]]),
-        multimask_output=False,
-    )
-
-    M_inv = cv2.getRotationMatrix2D(center, -angle, 1.0)
-    refined = cv2.warpAffine(new_masks[0].astype(np.uint8), M_inv, (img_w, img_h))
-    return refined > 0
-
-
 def process_SAM2(slice_masks, slice_shift, slice_scores, slice_categories, slice_size, min_area_threshold, downscale_pred, detection_model):
     shift_x, shift_y = slice_shift
     scores, polygons, category_ids, category_names, is_within_slice_list = [], [], [], [], []
@@ -135,7 +94,7 @@ def get_sliced_prediction_SAM2(in_raster,
                               postprocess_class_agnostic: bool = False,
                               batch_size: int = 16,
                               half: bool = False,
-                              refine_with_obb: bool = False):
+                              use_yolo_mask_prompt: bool = False):
     # Convert tiff (geospatial metadata) to PNG (expedted input to slice_image)
     in_raster = Path(in_raster)
     output_dir = Path(output_dir)
@@ -179,8 +138,9 @@ def get_sliced_prediction_SAM2(in_raster,
             )
 
         # This list stores one list per image slice. Each image slice's list contains
-        # all bounding box predictions whose confidence is at least confidence_threshold. 
+        # all bounding box predictions whose confidence is at least confidence_threshold.
         bounding_boxes_per_slice = []
+        yolo_masks_per_slice = []
         scores_per_slice = []
         categories_per_slice = []
         for j, prediction_result in enumerate(prediction_results):
@@ -190,9 +150,9 @@ def get_sliced_prediction_SAM2(in_raster,
             confidence_mask = slice_boxes[:, 4] >= confidence_threshold
             slice_boxes = slice_boxes[confidence_mask]
 
-            # Append bounding boxes for given image slice to list
-            if (len(slice_boxes) == 0):
+            if len(slice_boxes) == 0:
                 bounding_boxes_per_slice.append([])
+                yolo_masks_per_slice.append(None)
                 scores_per_slice.append([])
                 categories_per_slice.append([])
             else:
@@ -200,34 +160,45 @@ def get_sliced_prediction_SAM2(in_raster,
                 scores_per_slice.append(slice_boxes[:, 4])
                 categories_per_slice.append(slice_boxes[:, 5])
 
+                # Collect YOLO masks for optional mask-prompt mode
+                if use_yolo_mask_prompt and prediction_result.masks is not None:
+                    raw = prediction_result.masks.data[confidence_mask]  # (N, H, W)
+                    resized = []
+                    for m in raw:
+                        m_np = m.cpu().numpy().astype(np.float32)
+                        m_256 = cv2.resize(m_np, (256, 256), interpolation=cv2.INTER_LINEAR)
+                        resized.append(m_256[np.newaxis])  # (1, 256, 256)
+                    yolo_masks_per_slice.append(np.stack(resized))  # (N, 1, 256, 256)
+                else:
+                    yolo_masks_per_slice.append(None)
+
         # Run SAM2
         with torch.no_grad():
             non_empty_indices = [j for j, boxes in enumerate(bounding_boxes_per_slice) if len(boxes) > 0]
             existing_images = [batch_images[j] for j in non_empty_indices]
-            existing_bounding_boxes = [bounding_boxes_per_slice[j] for j in non_empty_indices]
-            
+
             if len(existing_images) > 0:
                 predictor.set_image_batch(existing_images)
-                masks_batch, _, _ =  predictor.predict_batch(
-                    None,
-                    None, 
-                    box_batch=existing_bounding_boxes, 
-                    multimask_output=False
-                )
+                if use_yolo_mask_prompt and all(yolo_masks_per_slice[j] is not None for j in non_empty_indices):
+                    # Use YOLO masks as prompts — no box, so SAM2 decoder has no rectangular bias
+                    mask_input_batch = [yolo_masks_per_slice[j] for j in non_empty_indices]
+                    masks_batch, _, _ = predictor.predict_batch(
+                        None,
+                        None,
+                        box_batch=None,
+                        mask_input_batch=mask_input_batch,
+                        multimask_output=False
+                    )
+                else:
+                    existing_bounding_boxes = [bounding_boxes_per_slice[j] for j in non_empty_indices]
+                    masks_batch, _, _ = predictor.predict_batch(
+                        None,
+                        None,
+                        box_batch=existing_bounding_boxes,
+                        multimask_output=False
+                    )
             else:
                 masks_batch = []
-
-        # Optional OBB refinement: re-prompt SAM2 with each mask's oriented bbox.
-        # Breaks batch mode (one set_image call per mask), so use only for small runs.
-        if refine_with_obb and len(masks_batch) > 0:
-            for j, non_empty_idx in enumerate(non_empty_indices):
-                img_np = np.array(batch_images[non_empty_idx])
-                refined_masks = []
-                for k in range(len(masks_batch[j])):
-                    mask_2d = np.squeeze(masks_batch[j][k]) > 0
-                    refined = refine_mask_with_obb(img_np, mask_2d.astype(np.uint8), predictor)
-                    refined_masks.append(refined[np.newaxis].astype(masks_batch[j][k].dtype))
-                masks_batch[j] = np.stack(refined_masks)
 
         # Process results of SAM2
         if len(masks_batch) > 0:
