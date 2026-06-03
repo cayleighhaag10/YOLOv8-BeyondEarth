@@ -32,20 +32,20 @@ def refine_mask_with_obb(image_np, mask, predictor):
     rect = cv2.minAreaRect(max(contours, key=cv2.contourArea))
     center, (w, h), angle = rect
 
-    if w == 0 or h == 0 or abs(angle % 90) < 5:
+    # Skip if already within 5° of axis-aligned (angle in [-90,0), so check both ends)
+    if w == 0 or h == 0 or min(abs(angle), abs(angle + 90)) < 5:
         return mask.astype(bool)
 
     img_h, img_w = image_np.shape[:2]
     M = cv2.getRotationMatrix2D(center, angle, 1.0)
     rotated_image = cv2.warpAffine(image_np, M, (img_w, img_h))
 
-    half_long  = max(w, h) / 2
-    half_short = min(w, h) / 2
+    # After rotating by `angle`, w is horizontal and h is vertical — use directly
     cx, cy = center
-    x1 = max(0.0, cx - half_long)
-    y1 = max(0.0, cy - half_short)
-    x2 = min(float(img_w), cx + half_long)
-    y2 = min(float(img_h), cy + half_short)
+    x1 = max(0.0, cx - w / 2)
+    y1 = max(0.0, cy - h / 2)
+    x2 = min(float(img_w), cx + w / 2)
+    y2 = min(float(img_h), cy + h / 2)
 
     predictor.set_image(rotated_image)
     new_masks, _, _ = predictor.predict(
